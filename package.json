@@ -1,0 +1,24 @@
+{
+  "name": "somnia-monorepo",
+  "version": "1.0.0",
+  "description": "Monorepo with Somnia Data Streams service and React app",
+  "private": true,
+  "workspaces": [
+    "service",
+    "app"
+  ],
+  "scripts": {
+    "dev:service": "npm run dev --workspace=service",
+    "dev:app": "npm run dev --workspace=app",
+    "build:service": "npm run build --workspace=service",
+    "build:app": "npm run build --workspace=app",
+    "build": "npm run build:service && npm run build:app",
+    "format": "biome format --write .",
+    "lint": "biome lint --write .",
+    "check": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0"
+  },
+  "license": "MIT"
+}
