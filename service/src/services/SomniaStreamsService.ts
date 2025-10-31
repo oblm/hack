@@ -1,23 +1,27 @@
-import { SDK, zeroBytes32, SchemaEncoder } from '@somnia-chain/streams';
-import { createPublicClient, createWalletClient, http, type Hex } from 'viem';
+import { SDK, SchemaEncoder } from '@somnia-chain/streams';
+import { createPublicClient, createWalletClient, http, toHex, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-interface GPSData {
+// Ledger entry for a single user
+export interface LedgerEntry {
+  userId: string;
+  totalSeconds: number;
+}
+
+// Complete ledger state (all users)
+export interface LedgerState {
+  entries: LedgerEntry[];
   timestamp: number;
-  latitude: number;
-  longitude: number;
-  altitude: number;
-  accuracy: number;
-  entityId: string;
-  nonce: number;
 }
 
 export class SomniaStreamsService {
   private sdk!: SDK;
-  private gpsSchema!: string;
-  private schemaEncoder!: SchemaEncoder;
-  private schemaId!: Hex;
   private walletAddress!: Hex;
+  
+  // Simple ledger schema: userId -> totalSeconds
+  private ledgerSchema!: string;
+  private ledgerSchemaEncoder!: SchemaEncoder;
+  private ledgerSchemaId!: Hex;
 
   constructor() {
     // Validate environment variables
@@ -31,19 +35,24 @@ export class SomniaStreamsService {
     if (!process.env.PRIVATE_KEY) {
       throw new Error('PRIVATE_KEY environment variable is required');
     }
+    if (!process.env.LEDGER_SCHEMA_ID) {
+      throw new Error('LEDGER_SCHEMA_ID environment variable is required. Run: npm run setup');
+    }
   }
 
   /**
    * Initialize the service by setting up clients and schema
    */
   async initialize() {
-    console.log('Initializing Somnia Streams SDK...');
+    console.log('Initializing Somnia Streams SDK for Pay-Per-Second Service...');
 
-    // Define the GPS schema
-    this.gpsSchema = 'uint64 timestamp, int32 latitude, int32 longitude, int32 altitude, uint32 accuracy, bytes32 entityId, uint256 nonce';
+    // Ledger schema: Complete state as JSON string
+    // Format: { "0x123...": 42, "0x456...": 18 }
+    // Client subscribes to LedgerUpdated event, parses JSON, finds their userId
+    this.ledgerSchema = 'string ledgerJson';
     
     // Create schema encoder
-    this.schemaEncoder = new SchemaEncoder(this.gpsSchema);
+    this.ledgerSchemaEncoder = new SchemaEncoder(this.ledgerSchema);
 
     // Set up wallet account
     const privateKey = process.env.PRIVATE_KEY;
@@ -69,81 +78,66 @@ export class SomniaStreamsService {
       wallet: walletClient,
     });
 
-    // Compute schema ID
-    this.schemaId = await this.sdk.streams.computeSchemaId(this.gpsSchema);
-    console.log(`✓ Schema ID computed: ${this.schemaId}`);
+    // Use pre-computed ledger schema ID from environment
+    // This avoids recomputing it on every startup
+    this.ledgerSchemaId = process.env.LEDGER_SCHEMA_ID as `0x${string}`;
+    
+    console.log(`✓ Ledger Schema ID: ${this.ledgerSchemaId}`);
     console.log(`✓ Wallet address: ${this.walletAddress}\n`);
   }
 
   /**
-   * Write GPS data to the stream
+   * Publish entire ledger state to Somnia Streams as JSON with event emission
+   * Uses zero-fetch pattern - clients receive data directly in event
+   * Publishes all users' balances in a single update
+   * Clients subscribe to LedgerUpdated event, parse JSON, and filter locally
    */
-  async writeGPSData(data: GPSData): Promise<{ txHash: Hex }> {
-    console.log('Encoding GPS data...');
+  async publishLedgerState(entries: LedgerEntry[]): Promise<string> {
+    const timestamp = Date.now();
     
-    // Encode the data according to the schema
-    const encodedData: Hex = this.schemaEncoder.encodeData([
-      { name: 'timestamp', value: data.timestamp.toString(), type: 'uint64' },
-      { name: 'latitude', value: data.latitude.toString(), type: 'int32' },
-      { name: 'longitude', value: data.longitude.toString(), type: 'int32' },
-      { name: 'altitude', value: data.altitude.toString(), type: 'int32' },
-      { name: 'accuracy', value: data.accuracy.toString(), type: 'uint32' },
-      { name: 'entityId', value: this.toBytes32(data.entityId), type: 'bytes32' },
-      { name: 'nonce', value: data.nonce.toString(), type: 'uint256' },
-    ]);
-
-    console.log('Publishing data to stream...');
-    
-    // Publish the data
-    const txHash = await this.sdk.streams.set([
-      {
-        id: this.toBytes32(data.entityId),
-        schemaId: this.schemaId,
-        data: encodedData,
-      },
-    ]);
-
-    return { txHash };
-  }
-
-  /**
-   * Read GPS data from the stream
-   */
-  async readGPSData(dataKey: string): Promise<unknown> {
-    console.log(`Fetching data for key: ${dataKey}...`);
-    
-    const data = await this.sdk.streams.getByKey(
-      this.schemaId,
-      this.walletAddress,
-      this.toBytes32(dataKey)
-    );
-
-    if (data) {
-      // If schema is not public, decode manually
-      return this.schemaEncoder.decode(data);
+    console.log(`📊 Ledger Update: ${entries.length} users`);
+    for (const entry of entries) {
+      console.log(`   ${entry.userId.slice(0, 8)}... → ${entry.totalSeconds}s`);
     }
 
-    return null;
+    // Create ledger object: { userId: totalSeconds, ... }
+    const ledgerObject: Record<string, number> = {};
+    for (const entry of entries) {
+      ledgerObject[entry.userId] = entry.totalSeconds;
+    }
+
+    // Serialize to JSON string
+    const ledgerJson = JSON.stringify(ledgerObject);
+
+    const encodedData: Hex = this.ledgerSchemaEncoder.encodeData([
+      { name: 'ledgerJson', value: ledgerJson, type: 'string' },
+    ]);
+
+
+    // Data stream to write
+    const dataStream = [{
+      id: toHex(timestamp, { size: 32 }),
+      schemaId: this.ledgerSchemaId,
+      data: encodedData
+    }];
+
+
+    const eventStream = [{
+      id: 'LedgerUpdated',
+      argumentTopics: [],
+      data: '0x' as `0x${string}`
+    }];
+
+    // Publish data + emit event in single transaction
+    const result = await this.sdk.streams.setAndEmitEvents(dataStream, eventStream);
+
+    if (!result || result instanceof Error) {
+      throw new Error('Failed to publish ledger state');
+    }
+
+    console.log(`  ✅ Published entire ledger with event (tx: ${result.slice(0, 10)}...)\n`);
+    return result;
   }
 
-  /**
-   * Helper method to convert string to bytes32
-   */
-  private toBytes32(value: string): Hex {
-    // If already a hex string, return as is
-    if (value.startsWith('0x')) {
-      return value as Hex;
-    }
-    
-    // Convert string to hex with proper padding
-    const encoder = new TextEncoder();
-    const bytes = encoder.encode(value);
-    const hex = Array.from(bytes)
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-    
-    // Pad to 32 bytes (64 hex characters)
-    return `0x${hex.padEnd(64, '0')}` as Hex;
-  }
 }
 
