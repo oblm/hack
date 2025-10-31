@@ -7,6 +7,8 @@ const allQuotes: string[] = quotesData;
 // Configuration
 const NUM_QUOTES_TO_DISPLAY = 2;
 const BIAS_TOWARDS_EARLIER_QUOTES = 50; // Percentage (0-100)
+const MAX_NORMAL_SPEED = 0.15; // Maximum speed for normal drift (after deceleration)
+const DECELERATION_TIME = 0.5; // Time in seconds to decelerate to max speed
 
 interface Quote {
   id: number;
@@ -258,6 +260,30 @@ function App() {
             q2.vy = Math.max(-maxVel, Math.min(maxVel, q2.vy));
           }
         }
+
+        // Apply deceleration to slow quotes back down to max normal speed
+        // Calculate deceleration rate based on deltaTime (frame-rate independent)
+        // Target: reduce speed to MAX_NORMAL_SPEED over DECELERATION_TIME seconds
+        const deltaTime = 1 / 60; // Assume 60fps, ~16.67ms per frame
+        const decelerationRate = 1 / DECELERATION_TIME; // Per second
+        
+        updatedQuotes.forEach((quote) => {
+          const currentSpeed = Math.sqrt(quote.vx * quote.vx + quote.vy * quote.vy);
+          
+          if (currentSpeed > MAX_NORMAL_SPEED) {
+            // Calculate target velocity (maintain direction, reduce to max speed)
+            const directionX = quote.vx / currentSpeed;
+            const directionY = quote.vy / currentSpeed;
+            const targetVx = directionX * MAX_NORMAL_SPEED;
+            const targetVy = directionY * MAX_NORMAL_SPEED;
+            
+            // Decelerate towards target velocity over DECELERATION_TIME seconds
+            // Lerp factor: how much to move towards target this frame
+            const lerpFactor = decelerationRate * deltaTime;
+            quote.vx = quote.vx + (targetVx - quote.vx) * lerpFactor;
+            quote.vy = quote.vy + (targetVy - quote.vy) * lerpFactor;
+          }
+        });
 
         return updatedQuotes;
       });
