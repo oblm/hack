@@ -23,17 +23,28 @@ body {
 }
 
 .app {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  padding: 2rem;
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: var(--bg);
 }
 
 .quote {
+  position: absolute;
   font-size: 1.5rem;
-  color: var(--text);
-  margin-bottom: 2rem;
+  color: #ffffff;
   padding: 1rem;
+  white-space: pre;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  max-width: 600px;
+  text-shadow: 
+    0 0 10px rgba(255, 255, 255, 0.8),
+    0 0 20px rgba(255, 255, 255, 0.6),
+    0 0 30px rgba(255, 255, 255, 0.4),
+    0 0 40px rgba(255, 255, 255, 0.2);
 }
 
 .header {
