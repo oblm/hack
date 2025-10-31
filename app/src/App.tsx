@@ -5,10 +5,34 @@ import quotesData from './quotes.json';
 const allQuotes: string[] = quotesData;
 
 // Configuration
-const NUM_QUOTES_TO_DISPLAY = 2;
 const BIAS_TOWARDS_EARLIER_QUOTES = 50; // Percentage (0-100)
 const MAX_NORMAL_SPEED = 0.15; // Maximum speed for normal drift (after deceleration)
 const DECELERATION_TIME = 0.5; // Time in seconds to decelerate to max speed
+
+// Screen size reference points for quote scaling
+const IPHONE_SCREEN_AREA = 375 * 812; // iPhone screen area (approx)
+const MACBOOK_SCREEN_AREA = 1440 * 900; // MacBook screen area (approx)
+const IPHONE_QUOTES = 2;
+const MACBOOK_QUOTES = 6;
+
+// Calculate number of quotes based on screen size
+const calculateQuoteCount = (): number => {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const screenArea = width * height;
+  
+  // Linear interpolation between iPhone and MacBook sizes
+  if (screenArea <= IPHONE_SCREEN_AREA) {
+    return IPHONE_QUOTES;
+  } else if (screenArea >= MACBOOK_SCREEN_AREA) {
+    return MACBOOK_QUOTES;
+  } else {
+    // Interpolate between iPhone and MacBook
+    const ratio = (screenArea - IPHONE_SCREEN_AREA) / (MACBOOK_SCREEN_AREA - IPHONE_SCREEN_AREA);
+    const quoteCount = IPHONE_QUOTES + (MACBOOK_QUOTES - IPHONE_QUOTES) * ratio;
+    return Math.round(quoteCount);
+  }
+};
 
 interface Quote {
   id: number;
@@ -17,9 +41,24 @@ interface Quote {
   y: number;
   vx: number;
   vy: number;
+  opacity: number;
 }
 
 function App() {
+  // Track target quote count (what screen size wants) vs current quote count
+  const targetQuoteCountRef = useRef<number>(calculateQuoteCount());
+  const [numQuotes, setNumQuotes] = useState(() => targetQuoteCountRef.current);
+  
+  // Update target quote count when window resizes (but don't change actual quotes yet)
+  useEffect(() => {
+    const handleResize = () => {
+      targetQuoteCountRef.current = calculateQuoteCount();
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Get random quotes with bias towards earlier quotes
   const getRandomQuotes = (count: number, biasPercent: number) => {
     const selected: string[] = [];
@@ -65,10 +104,12 @@ function App() {
     return selected;
   };
 
-  const quoteTexts = getRandomQuotes(NUM_QUOTES_TO_DISPLAY, BIAS_TOWARDS_EARLIER_QUOTES);
+  // Track current quote index for rotation
+  const currentQuoteIndexRef = useRef<number>(numQuotes);
   
   // Initialize quotes with random positions and velocities
   const [quotes, setQuotes] = useState<Quote[]>(() => {
+    const quoteTexts = getRandomQuotes(numQuotes, BIAS_TOWARDS_EARLIER_QUOTES);
     return quoteTexts.map((text, index) => ({
       id: index,
       text,
@@ -76,12 +117,73 @@ function App() {
       y: Math.random() * 80 + 10, // 10-90% of screen height
       vx: (Math.random() - 0.5) * 0.15, // Random velocity -0.075 to 0.075 (slower start)
       vy: (Math.random() - 0.5) * 0.15,
+      opacity: 1,
     }));
   });
 
   const quoteRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number>();
+
+  // Cycle quotes every 8 seconds: fade out, wait 1s, fade in new quotes
+  useEffect(() => {
+    const cycleQuotes = () => {
+      // Check if we need to update quote count based on screen size
+      const targetCount = targetQuoteCountRef.current;
+      if (targetCount !== numQuotes) {
+        setNumQuotes(targetCount);
+        currentQuoteIndexRef.current = targetCount;
+      }
+
+      // Fade out current quotes
+      setQuotes((prevQuotes) =>
+        prevQuotes.map((quote) => ({ ...quote, opacity: 0 }))
+      );
+
+      // After 1 second, fade in new quotes
+      setTimeout(() => {
+        // Use the current target count (may have changed)
+        const currentTargetCount = targetQuoteCountRef.current;
+        
+        // Get next quotes from the list (rotating through)
+        const newQuoteTexts: string[] = [];
+        for (let i = 0; i < currentTargetCount; i++) {
+          const index = (currentQuoteIndexRef.current + i) % allQuotes.length;
+          newQuoteTexts.push(allQuotes[index]!);
+        }
+        currentQuoteIndexRef.current =
+          (currentQuoteIndexRef.current + currentTargetCount) %
+          allQuotes.length;
+
+        // Create new quotes with new positions and velocities
+        setQuotes(
+          newQuoteTexts.map((text, index) => ({
+            id: index,
+            text,
+            x: Math.random() * 80 + 10,
+            y: Math.random() * 80 + 10,
+            vx: (Math.random() - 0.5) * 0.15,
+            vy: (Math.random() - 0.5) * 0.15,
+            opacity: 0, // Start invisible, will fade in
+          }))
+        );
+
+        // Fade in new quotes
+        setTimeout(() => {
+          setQuotes((prevQuotes) =>
+            prevQuotes.map((quote) => ({ ...quote, opacity: 1 }))
+          );
+        }, 50); // Small delay to ensure DOM update
+      }, 1000);
+    };
+
+    // Start cycling every 8 seconds
+    const intervalId = setInterval(cycleQuotes, 8000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [numQuotes]);
 
   useEffect(() => {
     const animate = () => {
@@ -165,6 +267,9 @@ function App() {
             const el2 = quoteRefs.current.get(q2.id);
 
             if (!el1 || !el2) continue;
+            
+            // Skip collision detection for quotes that are fading in/out
+            if (q1.opacity < 0.5 || q2.opacity < 0.5) continue;
 
             const rect1 = el1.getBoundingClientRect();
             const rect2 = el2.getBoundingClientRect();
@@ -316,6 +421,7 @@ function App() {
           style={{
             left: `${quote.x}%`,
             top: `${quote.y}%`,
+            opacity: quote.opacity,
           }}
         >
           {quote.text}
