@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import './App.css';
 import quotesData from './quotes.json';
+import { Leaderboard } from './components/Leaderboard';
 
 const allQuotes: string[] = quotesData;
 
@@ -44,7 +45,26 @@ interface Quote {
   opacity: number;
 }
 
+// API Configuration
+const API_BASE_URL = 'http://localhost:3001';
+
+// Generate a unique user ID per tab/session for testing
+// In production, this would come from authentication
+const getUserId = () => {
+  // Use sessionStorage instead of localStorage so each tab gets its own ID
+  let userId = sessionStorage.getItem('userId');
+  if (!userId) {
+    userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    sessionStorage.setItem('userId', userId);
+  }
+  return userId;
+};
+
 function App() {
+  // Track whether animation is running
+  const [isRunning, setIsRunning] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  
   // Track target quote count (what screen size wants) vs current quote count
   const targetQuoteCountRef = useRef<number>(calculateQuoteCount());
   const [numQuotes, setNumQuotes] = useState(() => targetQuoteCountRef.current);
@@ -125,8 +145,71 @@ function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const animationFrameRef = useRef<number>();
 
+  // API handlers for start/stop streaming
+  const handleStart = async () => {
+    try {
+      const userId = getUserId();
+      const response = await fetch(`${API_BASE_URL}/api/stream/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to start stream');
+      }
+
+      const data = await response.json();
+      setSessionId(data.sessionId);
+      setIsRunning(true);
+      
+      console.log('Stream started:', data);
+    } catch (error) {
+      console.error('Error starting stream:', error);
+      alert('Failed to start stream. Make sure the server is running on port 3001.');
+    }
+  };
+
+  const handleStop = async () => {
+    if (!sessionId) {
+      setIsRunning(false);
+      return;
+    }
+
+    try {
+      const userId = getUserId();
+      const response = await fetch(`${API_BASE_URL}/api/stream/stop`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ sessionId, userId }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to stop stream');
+      }
+
+      const data = await response.json();
+      console.log('Stream stopped:', data);
+      
+      setIsRunning(false);
+      setSessionId(null);
+    } catch (error) {
+      console.error('Error stopping stream:', error);
+      alert('Failed to stop stream. Make sure the server is running on port 3001.');
+      // Still stop the animation even if API call fails
+      setIsRunning(false);
+      setSessionId(null);
+    }
+  };
+
   // Cycle quotes every 8 seconds: fade out, wait 1s, fade in new quotes
   useEffect(() => {
+    if (!isRunning) return;
+    
     const cycleQuotes = () => {
       // Check if we need to update quote count based on screen size
       const targetCount = targetQuoteCountRef.current;
@@ -183,9 +266,11 @@ function App() {
     return () => {
       clearInterval(intervalId);
     };
-  }, [numQuotes]);
+  }, [numQuotes, isRunning]);
 
   useEffect(() => {
+    if (!isRunning) return;
+    
     const animate = () => {
       const container = containerRef.current;
       if (!container) {
@@ -403,11 +488,33 @@ function App() {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, []);
+  }, [isRunning]);
 
   return (
     <div className="app" ref={containerRef}>
-      {quotes.map((quote) => (
+      <Leaderboard />
+      
+      <div className="controls">
+        {!isRunning ? (
+          <button 
+            type="button"
+            className="control-button start-button" 
+            onClick={handleStart}
+          >
+            Start
+          </button>
+        ) : (
+          <button 
+            type="button"
+            className="control-button stop-button" 
+            onClick={handleStop}
+          >
+            Stop
+          </button>
+        )}
+      </div>
+      
+      {isRunning && quotes.map((quote) => (
         <div
           key={quote.id}
           ref={(el) => {
