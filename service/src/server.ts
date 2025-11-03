@@ -20,7 +20,6 @@ const PRICE_PER_SECOND = 0.001; // $0.001 per second
 interface ActiveSession {
   sessionId: string;
   userId: string;
-  contentId: string;
   startTime: number;
 }
 
@@ -65,11 +64,11 @@ function generateSessionId(): string {
  */
 app.post('/api/stream/start', (req: Request, res: Response) => {
   try {
-    const { userId, contentId } = req.body;
+    const { userId } = req.body;
 
-    if (!userId || !contentId) {
+    if (!userId) {
       return res.status(400).json({
-        error: 'Missing required fields: userId and contentId'
+        error: 'Missing required fields: userId'
       });
     }
 
@@ -85,7 +84,6 @@ app.post('/api/stream/start', (req: Request, res: Response) => {
     const session: ActiveSession = {
       sessionId,
       userId,
-      contentId,
       startTime,
     };
 
@@ -102,7 +100,6 @@ app.post('/api/stream/start', (req: Request, res: Response) => {
 
     console.log(`🎬 Session started: ${sessionId}`);
     console.log(`   User: ${userId}`);
-    console.log(`   Content: ${contentId}`);
     console.log('   📊 Ledger updates: Every 1 second');
     console.log(`   Time: ${new Date(startTime).toISOString()}\n`);
 
@@ -200,7 +197,6 @@ app.get('/api/stream/status/:sessionId', (req: Request, res: Response) => {
     res.json({
       sessionId: session.sessionId,
       userId: session.userId,
-      contentId: session.contentId,
       startTime: session.startTime,
       secondsElapsed,
       currentCost,
@@ -227,7 +223,6 @@ app.get('/api/stream/sessions', (req: Request, res: Response) => {
       return {
         sessionId: session.sessionId,
         userId: session.userId,
-        contentId: session.contentId,
         startTime: session.startTime,
         secondsElapsed,
         currentCost,
@@ -282,7 +277,7 @@ setInterval(async () => {
   }
 
   // Publish ENTIRE ledger as a single update
-  if (userLedger.size > 0) {
+  if (userLedger.size > 0 && activeSessions.size > 0) {
     const ledgerEntries = Array.from(userLedger.values()).map(entry => ({
       userId: entry.userId,
       totalSeconds: entry.totalSeconds,
@@ -297,7 +292,7 @@ setInterval(async () => {
 }, 1000); // Publish every 1 second
 
 // Optional: Auto-stop stale sessions after timeout
-const AUTO_STOP_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const AUTO_STOP_TIMEOUT = 10 * 1000; // 10 seconds
 setInterval(async () => {
   const now = Date.now();
 
